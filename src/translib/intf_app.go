@@ -1193,6 +1193,42 @@ func (app *IntfApp) translateCommon(d *db.DB, inpOp reqType) ([]db.WatchKeys, er
 
 				app.ifTableMap[ifKey] = entry
 			}
+
+			if intf.Ethernet != nil {
+				if intf.Ethernet.Config != nil {
+					log.Info("Ethernet.Config.PortSpeed", intf.Ethernet.Config.PortSpeed)
+
+					switch intf.Ethernet.Config.PortSpeed {
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_2500MB:
+						curr.Field["speed"] = strconv.Itoa(int(2500))
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_1GB:
+						curr.Field["speed"] = strconv.Itoa(int(1000))
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_5GB:
+						curr.Field["speed"] = strconv.Itoa(int(5000))
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_10GB:
+						curr.Field["speed"] = strconv.Itoa(int(10000))
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_25GB:
+						curr.Field["speed"] = strconv.Itoa(int(25000))
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_40GB:
+						curr.Field["speed"] = strconv.Itoa(int(40000))
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_50GB:
+						curr.Field["speed"] = strconv.Itoa(int(50000))
+					case ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_100GB:
+						curr.Field["speed"] = strconv.Itoa(int(100000))
+					default:
+						log.Infof("Not supported speed")
+					}
+				}
+
+				log.Info("Writing to db for ", ifKey)
+				var entry dbEntry
+				entry.op = opUpdate
+				log.Info("curr= ", curr)
+				entry.entry = curr
+
+				app.portCfgMap[ifKey] = entry
+			}
+
 			if intf.Subinterfaces == nil {
 				continue
 			}
@@ -1373,6 +1409,14 @@ func (app *IntfApp) processCommon(d *db.DB) (SetResponse, error) {
 				log.Info("Deleting entry for ", key, ":", ip)
 				err = d.DeleteEntry(app.intfIPTs, db.Key{Comp: []string{key, ip}})
 			}
+		}
+	}
+
+	for key, entry2 := range app.portCfgMap {
+		log.Info("entry2= ", entry2)
+		if entry2.op == opUpdate {
+			log.Info("Updating entry for ", key)
+			err = d.SetEntry(app.portTs, db.Key{Comp: []string{key}}, entry2.entry)
 		}
 	}
 	return resp, err
