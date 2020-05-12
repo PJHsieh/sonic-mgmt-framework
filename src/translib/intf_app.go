@@ -62,6 +62,7 @@ type Table int
 const (
 	IF_TABLE_MAP Table = iota
 	PORT_STAT_MAP
+	PORT_CFG_MAP
 )
 
 type IntfApp struct {
@@ -80,6 +81,7 @@ type IntfApp struct {
 	ifIPTableMap map[string]map[string]dbEntry
 	portOidMap   dbEntry
 	portStatMap  map[string]dbEntry
+	portCfgMap   map[string]dbEntry
 
 	portTs             *db.TableSpec
 	portTblTs          *db.TableSpec
@@ -125,6 +127,7 @@ func (app *IntfApp) initialize(data appData) {
 	app.ifTableMap = make(map[string]dbEntry)
 	app.ifIPTableMap = make(map[string]map[string]dbEntry)
 	app.portStatMap = make(map[string]dbEntry)
+	app.portCfgMap = make(map[string]dbEntry)
 }
 
 func (app *IntfApp) getAppRootObject() *ocbinds.OpenconfigInterfaces_Interfaces {
@@ -365,6 +368,28 @@ func (app *IntfApp) processGet(dbs [db.MaxDB]*db.DB) (GetResponse, error) {
 						return GetResponse{Payload: payload, ErrSrc: AppErr}, err
 					}
 				}
+				/* Filling Ethernet Config Info to internal DS */
+				err = app.convertDbCfgInfoToInternal(dbs[db.ConfigDB], ifKey, db.Key{Comp: []string{ifKey}})
+				if err != nil {
+					return GetResponse{Payload: payload, ErrSrc: AppErr}, err
+				}
+
+				/*Check if the request is for a specific attribute in Interfaces Ethernet Config container*/
+				cfg_val := &ocbinds.OpenconfigInterfaces_Interfaces_Interface_Ethernet_Config{}
+				cfg_ok, cfg_e := app.getSpecificConfig(targetUriPath, ifKey, cfg_val)
+				if cfg_ok {
+					if cfg_e != nil {
+						return GetResponse{Payload: payload, ErrSrc: AppErr}, cfg_e
+					}
+
+					payload, err = dumpIetfJson(cfg_val, false)
+					if err == nil {
+						return GetResponse{Payload: payload}, err
+					} else {
+						return GetResponse{Payload: payload, ErrSrc: AppErr}, err
+					}
+
+				}
 
 				/* Filling the counter Info to internal DS */
 				err = app.getPortOidMapForCounters(app.countersDB)
@@ -560,7 +585,42 @@ func (app *IntfApp) getSpecificAttr(targetUriPath string, ifKey string, oc_val *
 			return true, nil
 		}
 		return true, e
+	default:
+		log.Infof(targetUriPath + " - Not an interface state attribute")
+	}
+	return false, nil
+}
 
+func (app *IntfApp) getSpecificConfig(targetUriPath string, ifKey string, oc_val *ocbinds.OpenconfigInterfaces_Interfaces_Interface_Ethernet_Config) (bool, error) {
+	switch targetUriPath {
+	case "/openconfig-interfaces:interfaces/interface/openconfig-if-ethernet:ethernet/config/port-speed":
+		log.Infof(targetUriPath + " - is an interface ethernet config")
+		speed, e := app.getIntfAttr(ifKey, PORT_SPEED, PORT_CFG_MAP)
+		log.Infof("speed=%v, e=%v", speed, e)
+		if e == nil {
+			switch speed {
+			case "2500":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_2500MB
+			case "1000":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_1GB
+			case "5000":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_5GB
+			case "10000":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_10GB
+			case "25000":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_25GB
+			case "40000":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_40GB
+			case "50000":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_50GB
+			case "100000":
+				oc_val.PortSpeed = ocbinds.OpenconfigIfEthernet_ETHERNET_SPEED_SPEED_100GB
+			default:
+				log.Infof("Not supported speed: %s!", speed)
+			}
+			return true, nil
+		}
+		return true, e
 	default:
 		log.Infof(targetUriPath + " - Not an interface state attribute")
 	}
@@ -681,6 +741,8 @@ func (app *IntfApp) getIntfAttr(ifName string, attr string, table Table) (string
 		entry, ok = app.ifTableMap[ifName]
 	} else if table == PORT_STAT_MAP {
 		entry, ok = app.portStatMap[ifName]
+	} else if table == PORT_CFG_MAP {
+		entry, ok = app.portCfgMap[ifName]
 	} else {
 		return "", errors.New("Unsupported table")
 	}
@@ -782,6 +844,32 @@ func (app *IntfApp) convertDBIntfInfoToInternal(dbCl *db.DB, ifName string, ifKe
 		for _, key := range keys {
 			app.convertDBIntfInfoToInternal(dbCl, key.Get(0), db.Key{Comp: []string{key.Get(0)}})
 		}
+	}
+	return err
+}
+
+func (app *IntfApp) convertDbCfgInfoToInternal(dbCl *db.DB, ifName string, ifKey db.Key) error {
+
+	var err error
+	/* Fetching DB data for a specific Interface */
+	if len(ifName) > 0 {
+		log.Info("Updating Interface info from CONFIG-DB to Internal DS for Interface name : ", ifName)
+		log.Info("Key : ", ifKey)
+		ifInfo, err := dbCl.GetEntry(app.portTs, ifKey)
+		if err != nil {
+			log.Errorf("Error found on fetching Interface info from Cfg DB for If Name : %s", ifName)
+			errStr := "Invalid Interface:" + ifName
+			err = tlerr.InvalidArgsError{Format: errStr}
+			return err
+		}
+		if ifInfo.IsPopulated() {
+			log.Info("Interface Info populated for ifName : ", ifName)
+			app.portCfgMap[ifName] = dbEntry{entry: ifInfo}
+		} else {
+			return errors.New("Populating Interface info for " + ifName + "failed")
+		}
+	} else {
+		err = errors.New("Not implemented")
 	}
 	return err
 }
